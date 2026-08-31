@@ -1,0 +1,23 @@
+[project]
+name = "prospect-intelligence"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "sivaprathish", email = "sivaprathishsiva@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "firecrawl-py>=4.38.0",
+    "google-genai>=2.20.0",
+    "python-dotenv>=1.2.3",
+    "seltz>=1.9.0",
+    "streamlit>=1.62.0",
+]
+
+[project.scripts]
+prospect-intelligence = "prospect_intelligence:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
