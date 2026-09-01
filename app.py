@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 from typing import Any
 from urllib.parse import urlparse
 
@@ -396,10 +397,30 @@ st.markdown(
 def safe_text(value: Any, default: str = "") -> str:
     """Escape dynamic text before rendering it as HTML."""
 
-    if value is None:
+    if value is None or value == "":
         value = default
 
     return html.escape(str(value))
+
+
+def safe_get(data: dict[str, Any], key: str, default: str = "") -> str:
+    """Get a dict value, falling back to default for both missing
+    keys AND keys explicitly set to None/empty (common with LLM
+    extraction output)."""
+
+    return data.get(key) or default
+
+
+def safe_float(value: Any, default: float = 0.0) -> float:
+    """Coerce a value to float, tolerating None/empty/invalid input."""
+
+    if value is None or value == "":
+        return default
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def valid_url(value: Any) -> str | None:
@@ -498,13 +519,9 @@ def render_company_header(
 ) -> None:
     """Render company identity header."""
 
-    company = profile.get(
-        "company_name",
-        "Prospect Company",
-    )
-
-    domain = profile.get("domain", "")
-    industry = profile.get("industry", "Unknown")
+    company = safe_get(profile, "company_name", "Prospect Company")
+    domain = safe_get(profile, "domain", "")
+    industry = safe_get(profile, "industry", "Unknown")
 
     st.markdown(
         f"""
@@ -538,44 +555,29 @@ def render_signals(
         return
 
     for signal in signals:
-        strength = float(
-            signal.get("signal_strength", 0)
-        )
+        strength = safe_float(signal.get("signal_strength"))
 
         priority, badge_class = priority_class(strength)
         source = valid_url(signal.get("source_url"))
 
-        st.markdown(
-            f"""
-            <div class="signal-card">
-                <div style="
-                    display:flex;
-                    justify-content:space-between;
-                    gap:1rem;
-                ">
-                    <div class="signal-title">
-                        {safe_text(signal.get("signal_type", "Signal"))}
-                    </div>
-                    <span class="priority-badge {badge_class}">
-                        {priority} · {strength:.0f}
-                    </span>
-                </div>
-
-                <div class="signal-description">
-                    {safe_text(signal.get("summary", ""))}
-                </div>
-
-                <div style="
-                    color:#475569;
-                    font-size:0.82rem;
-                    margin-top:0.5rem;
-                ">
-                    {safe_text(signal.get("business_impact", ""))}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        # NOTE: this HTML must be built flush-left with no blank lines.
+        # Streamlit's markdown renderer treats a blank line followed by
+        # indented text as an *indented code block*, which silently
+        # breaks unsafe_allow_html rendering partway through the card.
+        card_html = (
+            '<div class="signal-card">'
+            '<div style="display:flex; justify-content:space-between; gap:1rem;">'
+            f'<div class="signal-title">{safe_text(safe_get(signal, "signal_type", "Signal"))}</div>'
+            f'<span class="priority-badge {badge_class}">{priority} · {strength:.0f}</span>'
+            "</div>"
+            f'<div class="signal-description">{safe_text(signal.get("summary", ""))}</div>'
+            '<div style="color:#475569; font-size:0.82rem; margin-top:0.5rem;">'
+            f'{safe_text(signal.get("business_impact", ""))}'
+            "</div>"
+            "</div>"
         )
+
+        st.markdown(card_html, unsafe_allow_html=True)
 
         if source:
             st.markdown(
@@ -596,15 +598,10 @@ def render_people(
         return
 
     for person in people:
-        name = str(person.get("name", "Unknown"))
-        title = person.get(
-            "current_title",
-            "Title unavailable",
-        )
-        company = person.get("company", "")
-        fit_score = float(
-            person.get("contact_fit_score", 0)
-        )
+        name = safe_get(person, "name", "Unknown")
+        title = safe_get(person, "current_title", "Title unavailable")
+        company = safe_get(person, "company", "")
+        fit_score = safe_float(person.get("contact_fit_score"))
         profile_url = valid_url(
             person.get("profile_url")
         )
@@ -653,35 +650,26 @@ def render_people(
         with detail_left:
             st.markdown("**Matched opportunity**")
             st.write(
-                person.get(
-                    "matched_opportunity",
-                    "Not identified",
-                )
+                safe_get(person, "matched_opportunity", "Not identified")
             )
 
             st.markdown("**Department / seniority**")
             st.write(
-                f"{person.get('department', 'Unknown')} · "
-                f"{person.get('seniority', 'Unknown')}"
+                f"{safe_get(person, 'department', 'Unknown')} · "
+                f"{safe_get(person, 'seniority', 'Unknown')}"
             )
 
         with detail_right:
             st.markdown("**Recommended conversation topic**")
             st.write(
-                person.get(
-                    "conversation_topic",
-                    "Not available",
-                )
+                safe_get(person, "conversation_topic", "Not available")
             )
 
             st.markdown("**Employment validation**")
             st.write(
-                str(
-                    person.get(
-                        "employment_status",
-                        "unverified",
-                    )
-                ).replace("_", " ").title()
+                safe_get(person, "employment_status", "unverified")
+                .replace("_", " ")
+                .title()
             )
 
         st.markdown("**Why this person is relevant**")
@@ -843,7 +831,11 @@ with action_col:
     if st.session_state.prospect_result:
         st.download_button(
             label="Export JSON",
-            data=str(st.session_state.prospect_result),
+            data=json.dumps(
+                st.session_state.prospect_result,
+                indent=2,
+                default=str,
+            ),
             file_name="prospect_intelligence.json",
             mime="application/json",
             use_container_width=True,
@@ -866,12 +858,12 @@ if not st.session_state.prospect_result:
 
             company_name = first.text_input(
                 "Company name",
-                placeholder="Articul8 AI",
+                placeholder="",
             )
 
             company_domain = second.text_input(
                 "Official company domain",
-                placeholder="articul8.ai",
+                placeholder="",
                 help=(
                     "The official domain helps validate the "
                     "correct company and its current employees."
@@ -1000,9 +992,7 @@ if result:
         strong_signals = sum(
             1
             for signal in signals
-            if float(
-                signal.get("signal_strength", 0)
-            ) >= 70
+            if safe_float(signal.get("signal_strength")) >= 70
         )
 
         metric_card(
@@ -1024,9 +1014,7 @@ if result:
         high_fit_people = sum(
             1
             for person in people
-            if float(
-                person.get("contact_fit_score", 0)
-            ) >= 70
+            if safe_float(person.get("contact_fit_score")) >= 70
         )
 
         metric_card(
@@ -1093,11 +1081,8 @@ if result:
             with st.container(border=True):
                 if opportunities:
                     top_opportunity = opportunities[0]
-                    top_score = float(
-                        top_opportunity.get(
-                            "opportunity_score",
-                            0,
-                        )
+                    top_score = safe_float(
+                        top_opportunity.get("opportunity_score")
                     )
 
                     st.markdown(
@@ -1112,7 +1097,7 @@ if result:
                     )
 
                     st.markdown(
-                        f"**{top_opportunity.get('title', '')}**"
+                        f"**{safe_text(top_opportunity.get('title', ''))}**"
                     )
 
                     st.write(
@@ -1224,12 +1209,7 @@ if result:
             opportunities,
             start=1,
         ):
-            score = float(
-                opportunity.get(
-                    "opportunity_score",
-                    0,
-                )
-            )
+            score = safe_float(opportunity.get("opportunity_score"))
 
             priority, badge_class = priority_class(
                 score
@@ -1244,7 +1224,7 @@ if result:
                 with top:
                     st.markdown(
                         f"### {index}. "
-                        f"{opportunity.get('title', '')}"
+                        f"{safe_text(opportunity.get('title', ''))}"
                     )
 
                     st.write(
@@ -1284,26 +1264,17 @@ if result:
 
                 detail1.metric(
                     "Signal strength",
-                    opportunity.get(
-                        "signal_strength",
-                        0,
-                    ),
+                    safe_float(opportunity.get("signal_strength")),
                 )
 
                 detail2.metric(
                     "Pain-point relevance",
-                    opportunity.get(
-                        "pain_point_relevance",
-                        0,
-                    ),
+                    safe_float(opportunity.get("pain_point_relevance")),
                 )
 
                 detail3.metric(
                     "Business fit",
-                    opportunity.get(
-                        "business_fit",
-                        0,
-                    ),
+                    safe_float(opportunity.get("business_fit")),
                 )
 
                 st.markdown("**Matched pain point**")
@@ -1481,7 +1452,7 @@ if result:
 
             if source_list:
                 with st.expander(
-                    person.get("name", "Unknown person")
+                    safe_get(person, "name", "Unknown person")
                 ):
                     for url in source_list:
                         st.markdown(f"- [{url}]({url})")
